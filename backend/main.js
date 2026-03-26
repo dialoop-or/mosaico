@@ -15,6 +15,22 @@ var JimpFonts = require("jimp/fonts");
 var font;
 var font2x;
 
+app.set('trust proxy', 1);
+
+function getPublicBaseUrl(req) {
+    if (process.env.PUBLIC_BASE_URL) {
+        return process.env.PUBLIC_BASE_URL.replace(/\/+$/, '');
+    }
+
+    var forwardedProto = req.get('x-forwarded-proto');
+    var forwardedHost = req.get('x-forwarded-host');
+
+    var proto = forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol;
+    var host = forwardedHost ? forwardedHost.split(',')[0].trim() : req.get('host');
+
+    return proto + '://' + host;
+}
+
 async function loadFonts() {
     font = await loadFont(JimpFonts.SANS_32_BLACK);
     font2x = await loadFont(JimpFonts.SANS_64_BLACK);
@@ -25,29 +41,29 @@ loadFonts();
 app.use(require('connect-livereload')({ ignore: [/^\/dl/, /^\/img/, /^\/upload/] }));
 
 app.use(bodyParser.json({limit: '5mb'}));
-app.use(bodyParser.urlencoded({     // to support URL-encoded bodies
-  limit: '5mb',
-  extended: true
-})); 
+app.use(bodyParser.urlencoded({
+    limit: '5mb',
+    extended: true
+}));
 
 var uploadOptions = {
-  tmpDir: '.tmp',
-  uploadDir: './uploads',
-  uploadUrl: '/uploads',
-  fileTypes: ['image/png', 'image/jpg', 'image/jpeg', 'image/gif'],
+    tmpDir: '.tmp',
+    uploadDir: './uploads',
+    uploadUrl: '/uploads',
+    fileTypes: ['image/png', 'image/jpg', 'image/jpeg', 'image/gif'],
 };
 
 app.get('/upload/', function(req, res) {
     var files = [];
-    var uploadHost = req.protocol + '://' + req.get('host');
-    fs.readdirSync(uploadOptions.uploadDir).forEach( name => {
+    var uploadHost = getPublicBaseUrl(req);
+    fs.readdirSync(uploadOptions.uploadDir).forEach(name => {
         var stats = fs.statSync(uploadOptions.uploadDir + '/' + name);
         if (stats.isFile() && uploadOptions.fileTypes.includes(mime.lookup(name))) {
             files.push({
                 name: name,
                 size: stats.size,
                 url: uploadHost + uploadOptions.uploadUrl + '/' + name,
-                thumbnailUrl: '/img/?src=' + encodeURIComponent(uploadOptions.uploadUrl + '/' + name) + '&method=resize&params=' + encodeURIComponent('180,180')
+                thumbnailUrl: uploadHost + '/img/?src=' + encodeURIComponent(uploadOptions.uploadUrl + '/' + name) + '&method=resize&params=' + encodeURIComponent('180,180')
             });
         }
     });
@@ -75,7 +91,7 @@ const uploadHandler = multer({
         filename: (req, file, cb) => {
             safeName(uploadOptions.uploadDir, file.originalname, name => {
                 cb(null, name);
-            });            
+            });
         }
     }),
     filterImgFile: (req, file, cb) => {
@@ -86,13 +102,13 @@ const uploadHandler = multer({
 
 app.use('/upload/', uploadHandler.array('files[]', 20), function(req, res) {
     var files = [];
-    var uploadHost = req.protocol + '://' + req.get('host');
-    req.files.forEach( f => {
+    var uploadHost = getPublicBaseUrl(req);
+    req.files.forEach(f => {
         files.push({
             name: f.filename,
             size: f.size,
             url: uploadHost + uploadOptions.uploadUrl + '/' + f.filename,
-            thumbnailUrl: '/img/?src=' + encodeURIComponent(uploadOptions.uploadUrl + '/' + f.filename) + '&method=resize&params=' + encodeURIComponent('90,90')
+            thumbnailUrl: uploadHost + '/img/?src=' + encodeURIComponent(uploadOptions.uploadUrl + '/' + f.filename) + '&method=resize&params=' + encodeURIComponent('90,90')
         });
     });
     res.json({ files: files });
@@ -117,18 +133,18 @@ app.get('/img/', async function(req, res) {
 
         var tempImg = new Jimp({width: w * workScale, height: h * workScale, color: 0x0})
             .print({
-                font: req.query.method == 'placeholder2' ? font2x : font, 
-                x: 0, 
+                font: req.query.method == 'placeholder2' ? font2x : font,
+                x: 0,
                 y: 0,
                 text: {
                     text: text,
-                    alignmentX: HorizontalAlign.CENTER, // .HORIZONTAL_ALIGN_CENTER,
-                    alignmentY: VerticalAlign.MIDDLE, // Jimp.VERTICAL_ALIGN_MIDDLE
+                    alignmentX: HorizontalAlign.CENTER,
+                    alignmentY: VerticalAlign.MIDDLE,
                 },
                 maxWidth: w * workScale,
                 maxHeight: h * workScale
             })
-            .color([{ apply: 'xor', params: [ /* '#B0B0B0' */ { r: 176, g: 176, b: 176 }] }]);
+            .color([{ apply: 'xor', params: [{ r: 176, g: 176, b: 176 }] }]);
         image.blit(tempImg, 0, 0).getBuffer(JimpMime.png).then(buffer => {
             res.status(200).contentType('image/png').send(Buffer.from(buffer));
         }).catch(err => {
@@ -162,7 +178,7 @@ app.get('/img/', async function(req, res) {
                 }).catch(error => {
                     console.log("Error sending manipulated image: ", error);
                     res.status(500).send('Unexpected condition manipulating image: ' + error.message);
-                });                        
+                });
             };
             if (req.query.method == 'resize' || req.query.method == 'resizex') {
                 if (params[0] == 'null') {
@@ -208,7 +224,7 @@ app.get('/img/', async function(req, res) {
 
 app.post('/dl/', function(req, res) {
     var response = function(source) {
-        
+
         if (req.body.action == 'download') {
             res.setHeader('Content-disposition', 'attachment; filename=' + req.body.filename);
             res.setHeader('Content-type', 'text/html');
@@ -230,7 +246,7 @@ app.post('/dl/', function(req, res) {
                 }
             });
         }
-        
+
     };
 
     response(req.body.html);
@@ -243,8 +259,8 @@ app.use('/templates', express.static(__dirname + '/../templates'));
 app.use('/uploads', express.static(__dirname + '/../uploads'));
 app.use(express.static(__dirname + '/../dist/'));
 
-var server = app.listen( PORT, function() {
+var server = app.listen(PORT, function() {
     console.log('Express server listening on port ' + PORT);
-} );
+});
 
 // module.exports = app;
